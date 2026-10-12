@@ -1,5 +1,5 @@
 //
-// Created by kaleb on 10/10/2026.
+// Created by kaleb Accardi on 10/10/2026.
 //
 
 #include "cpu.h"
@@ -193,7 +193,7 @@ static void dec_r16(CPU *cpu, const RegisterPair destination) {
       cpu->L = (value & 0xFF);
       break;
     case SP:
-      cpu->SP++;
+      cpu->SP--;
       break;
     default:
       return;
@@ -238,7 +238,6 @@ static void rlca(CPU *cpu) {
   cpu->A = (u8) (cpu->A << 1 | bit7);
   cpu->F = bit7 ? 0x10 : 0x00;
 }
-
 
 // opcode lookup
 /**
