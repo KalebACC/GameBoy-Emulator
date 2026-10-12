@@ -4,7 +4,7 @@
 
 #ifndef GAMEBOYEMU_MEMORY_H
 #define GAMEBOYEMU_MEMORY_H
-#include "include/types.h"
+#include "../include/types.h"
 
 
 /**

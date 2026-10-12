@@ -5,7 +5,7 @@
 #ifndef GAMEBOYEMU_CPU_H
 #define GAMEBOYEMU_CPU_H
 #include "memory.h"
-#include "include/types.h"
+#include "../include/types.h"
 
 typedef struct {
   //Registers
@@ -27,10 +27,12 @@ typedef enum {
   BC,
   DE,
   HL,
+  PC,
+  SP
 } RegisterPair;
 
 typedef enum {
-  A, B, C, D, E, H, L, F, PC, SP
+  A, B, C, D, E, H, L, F,
 } Register;
 
 //Primary functions
@@ -46,13 +48,11 @@ static u16 cpu_fetch16(CPU *cpu, const Memory *memory);
 //Block 0
 static void nop(const CPU *cpu); //0x00
 static void ld_r16_imm16(CPU *cpu, const Memory *memory, RegisterPair destination);
-
 static void ld_r16mem_a(const CPU *cpu, Memory *memory, RegisterPair destination);
-
 static void ld_a_r16mem(CPU *cpu, const Memory *memory, RegisterPair destination);
-
 static void ld_imm16_sp(CPU *cpu, Memory *memory);
-
+static void inc_r16(CPU *cpu, RegisterPair destination);
+static void dec_r16(CPU *cpu, const RegisterPair destination);
 static void ld_r8_imm8(CPU *cpu, const Memory *memory, Register destination);
 
 

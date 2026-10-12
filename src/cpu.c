@@ -3,7 +3,7 @@
 //
 
 #include "cpu.h"
-#include "include/types.h"
+#include "../include/types.h"
 
 
 /**
@@ -35,7 +35,6 @@ static u16 cpu_fetch16(CPU *cpu, const Memory *memory) {
 
 //opcodes
 
-
 //Block 0
 /**
  *  Executes a NOP operation.
@@ -46,7 +45,7 @@ static void nop(const CPU *cpu) {
 }
 
 /**
- * @brief loads a 16-bit value into register a group register.
+ * @brief Copy the value n16 into register r16.
  * @param cpu Pointer to the CPU.
  * @param memory Pointer to the Memory.
  * @param destination The 16-bit register to load to.
@@ -73,7 +72,7 @@ static void ld_r16_imm16(CPU *cpu, const Memory *memory, const RegisterPair dest
 }
 
 /**
- * @brief Stores the contents of register A into the memory address held by r16mem.
+ * @brief Copy the value in register A into the byte pointed to by r16.
  * @param cpu Pointer to the CPU.
  * @param memory Pointer to the Memory.
  * @param destination Destination register pair (BC, DE, or HL)
@@ -121,7 +120,7 @@ static void ld_a_r16mem(CPU *cpu, const Memory *memory, const RegisterPair desti
 }
 
 /**
- * @brief Stores the 16-bit value of SP at the specified 16-bit memory address.
+ * @brief Copy the byte pointed to by r16 into register A.
  * @param cpu Pointer to the CPU.
  * @param memory Pointer to the Memory.
  */
@@ -134,7 +133,75 @@ static void ld_imm16_sp(CPU *cpu, Memory *memory) {
 }
 
 /**
- * @brief Loads 8-bit value into register B.
+ * @brief Increment the value in register r16 by 1.
+ * @param cpu Pointer to the CPU.
+ * @param destination Destination register pair (BC, DE, or HL)
+ */
+static void inc_r16(CPU *cpu, const RegisterPair destination) {
+  u16 value;
+  switch (destination) {
+    case BC:
+      value = (u16) ((u16) cpu->B << 8 | cpu->C);
+      value++;
+      cpu->B = (value >> 8);
+      cpu->C = (value & 0xFF);
+      break;
+    case DE:
+      value = (u16) ((u16) cpu->D << 8 | cpu->E);
+      value++;
+      cpu->D = (value >> 8);
+      cpu->E = (value & 0xFF);
+      break;
+    case HL:
+      value = (u16) ((u16) cpu->H << 8 | cpu->L);
+      value++;
+      cpu->H = (value >> 8);
+      cpu->L = (value & 0xFF);
+      break;
+    case SP:
+      cpu->SP++;
+      break;
+    default:
+      return;
+  }
+}
+
+/**
+ * @brief Decrement the value in register r16 by 1.
+ * @param cpu Pointer to the CPU.
+ * @param destination Destination register pair (BC, DE, or HL)
+ */
+static void dec_r16(CPU *cpu, const RegisterPair destination) {
+  u16 value;
+  switch (destination) {
+    case BC:
+      value = (u16) ((u16) cpu->B << 8 | cpu->C);
+      value--;
+      cpu->B = (value >> 8);
+      cpu->C = (value & 0xFF);
+      break;
+    case DE:
+      value = (u16) ((u16) cpu->D << 8 | cpu->E);
+      value--;
+      cpu->D = (value >> 8);
+      cpu->E = (value & 0xFF);
+      break;
+    case HL:
+      value = (u16) ((u16) cpu->H << 8 | cpu->L);
+      value--;
+      cpu->H = (value >> 8);
+      cpu->L = (value & 0xFF);
+      break;
+    case SP:
+      cpu->SP++;
+      break;
+    default:
+      return;
+  }
+}
+
+/**
+ * @brief Copy the value n8 into register r8.
  * @param cpu Pointer to the CPU.
  * @param memory Pointer to the Memory.
  * @param destination The 8-bit register to load to
@@ -160,6 +227,18 @@ static void ld_r8_imm8(CPU *cpu, const Memory *memory, const Register destinatio
       return;
   }
 }
+
+/**
+ * @brief Rotate register A left.
+ * Z = 0, N = 0, H = 0, C = Result
+ * @param cpu Pointer to the CPU.
+ */
+static void rlca(CPU *cpu) {
+  const u8 bit7 = (u8)(cpu->A << 7);
+  cpu->A = (u8) (cpu->A << 1 | bit7);
+  cpu->F = bit7 ? 0x10 : 0x00;
+}
+
 
 // opcode lookup
 /**

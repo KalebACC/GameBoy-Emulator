@@ -4,8 +4,8 @@ project(GameboyEmu C)
 set(CMAKE_C_STANDARD 23)
 
 add_executable(GameboyEmu
-        cpu.c
-        cpu.h
+        src/cpu.c
+        src/cpu.h
         include/types.h
-        memory.c
-        memory.h)
+        src/memory.c
+        src/memory.h)
