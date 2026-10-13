@@ -55,5 +55,11 @@ static void inc_r16(CPU *cpu, RegisterPair destination);
 static void dec_r16(CPU *cpu, const RegisterPair destination);
 static void ld_r8_imm8(CPU *cpu, const Memory *memory, Register destination);
 static void rlca(CPU *cpu);
+static void rrca(CPU *cpu);
+static void rla(CPU *cpu);
+static void rra(CPU *cpu);
+static void daa(CPU *cpu);
+static void cpl(CPU *cpu);
+static void scf(CPU *cpu);
 
 #endif //GAMEBOYEMU_CPU_H

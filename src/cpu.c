@@ -4,7 +4,7 @@
 
 #include "cpu.h"
 #include "../include/types.h"
-
+#include <stdbool.h>
 
 /**
  * @brief Fetches the next opcode from memory at the current program counter and increments it.
@@ -230,13 +230,116 @@ static void ld_r8_imm8(CPU *cpu, const Memory *memory, const Register destinatio
 
 /**
  * @brief Rotate register A left.
- * Z = 0, N = 0, H = 0, C = Result
+ * Z = 0, N = 0, H = 0, C = Result.
  * @param cpu Pointer to the CPU.
  */
 static void rlca(CPU *cpu) {
-  const u8 bit7 = (u8)(cpu->A << 7);
+  const u8 bit7 = (u8) (cpu->A << 7);
   cpu->A = (u8) (cpu->A << 1 | bit7);
   cpu->F = bit7 ? 0x10 : 0x00;
+}
+
+/**
+ * @brief Rotate register A right.
+ * Z = 0, N = 0, H = 0, C = Result.
+ * @param cpu Pointer to the CPU
+ */
+static void rrca(CPU *cpu) {
+  const u8 bit0 = (u8) (cpu->A & 0x01);
+  cpu->A = (u8) ((cpu->A >> 1) | (bit0 << 7));
+  cpu->F = bit0 ? 0x10 : 0x00;
+}
+
+/**
+ * @brief Rotate register A left, through the carry flag.
+ * Z = 0, N = 0, H = 0, C = Result.
+ * @param cpu Pointer to the CPU.
+ */
+static void rla(CPU *cpu) {
+  const u8 old_carry = (u8) ((cpu->F >> 4) & 0x01);
+  const u8 bit7 = (u8) ((cpu->A >> 7) & 0x01);
+  cpu->A = (u8) ((cpu->A << 1) | old_carry);
+  cpu->F = bit7 ? 0x10 : 0x00;
+}
+
+/**
+ * @brief Rotate register A right, through the carry flag.
+ * Z = 0, N = 0, H = 0, C = Result.
+ * @param cpu Pointer to the CPU
+ */
+static void rra(CPU *cpu) {
+  const u8 old_carry = (u8) ((cpu->F >> 4) & 0x01);
+  const u8 bit0 = (u8) (cpu->A & 0x01);
+  cpu->A = (u8) ((cpu->A >> 1) | (old_carry << 7));
+  cpu->F = bit0 ? 0x10 : 0x00;
+}
+
+/**
+ * @brief Decimal Adjust Accumulator.
+ * Designed to be used after performing an arithmetic instruction (ADD, ADC, SUB, SBC)
+ * whose inputs were in Binary-Coded Decimal (BCD),
+ * adjusting the result to likewise be in BCD.
+ * @param cpu Pointer to the CPU
+ */
+static void daa(CPU *cpu) {
+  u8 adjustment = 0;
+  bool carry = (cpu->F & 0x10) != 0;
+  const bool subtract = (cpu->F & 0x40) != 0;
+  const bool half_carry = (cpu->F & 0x20) != 0;
+
+  if (!subtract) {
+    if (half_carry || (cpu->A & 0x0F) > 0x09) {
+      adjustment |= 0x06;
+    }
+
+    if (carry || cpu->A > 0x99) {
+      adjustment |= 0x60;
+      carry = true;
+    }
+    cpu->A = (u8) (cpu->A + adjustment);
+  } else {
+    // Previous operation was subtraction.
+    if (half_carry) {
+      adjustment |= 0x06;
+    }
+
+    if (carry) {
+      adjustment |= 0x60;
+    }
+
+    cpu->A = (u8) (cpu->A - adjustment);
+  }
+  cpu->F = (u8) (
+    (cpu->F & 0x40) |
+    (cpu->A == 0 ? 0x80 : 0) |
+    (carry ? 0x10 : 0)
+  );
+}
+
+/**
+ * Complement accumulator (A = ~A); also called bitwise NOT.
+ * @param cpu Pointer to the CPU
+ */
+static void cpl(CPU *cpu) {
+  cpu->A = (u8) ~cpu->A;
+  cpu->F = (u8) ((cpu->F & 0x90) | 0x60);
+}
+
+/**
+ * Set Carry Flag.
+ * @param cpu Pointer to the CPU.
+ */
+static void scf(CPU *cpu) {
+  cpu->F = (u8) ((cpu->F & 0x80) | 0x10);
+}
+
+/**
+ * Complement Carry Flag.
+ * @param cpu Pointer to the CPU.
+ */
+static void ccf(CPU *cpu) {
+  cpu->F ^= 0x10;
+  cpu->F &= (u8)~0x60;
 }
 
 // opcode lookup
