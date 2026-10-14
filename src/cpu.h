@@ -1,25 +1,27 @@
-//
 // Created by kaleb on 10/10/2026.
-//
 
 #ifndef GAMEBOYEMU_CPU_H
 #define GAMEBOYEMU_CPU_H
+
 #include "memory.h"
 #include "../include/types.h"
 
 typedef struct {
-  //Registers
+  // Registers
   u8 A;
   u8 B, C;
   u8 D, E;
   u8 H, L;
 
-  //flags
+  // Flags
   u8 F;
 
-  //special
+  // Special registers
   u16 PC;
   u16 SP;
+
+  //stopping
+  bool stopped;
 } CPU;
 
 typedef enum {
@@ -32,34 +34,24 @@ typedef enum {
 } RegisterPair;
 
 typedef enum {
-  A, B, C, D, E, H, L, F,
+  REG_A,
+  REG_B,
+  REG_C,
+  REG_D,
+  REG_E,
+  REG_H,
+  REG_L,
+  REG_F
 } Register;
 
-//Primary functions
+typedef enum {
+  COND_NZ,
+  COND_Z,
+  COND_NC,
+  COND_C
+} Condition;
+
+
 void cpu_step(CPU *cpu, const Memory *memory);
 
-u8 cpu_fetch(CPU *cpu, const Memory *memory);
-
-//Helper functions
-static u16 cpu_fetch16(CPU *cpu, const Memory *memory);
-
-//opcodes
-
-//Block 0
-static void nop(const CPU *cpu); //0x00
-static void ld_r16_imm16(CPU *cpu, const Memory *memory, RegisterPair destination);
-static void ld_r16mem_a(const CPU *cpu, Memory *memory, RegisterPair destination);
-static void ld_a_r16mem(CPU *cpu, const Memory *memory, RegisterPair destination);
-static void ld_imm16_sp(CPU *cpu, Memory *memory);
-static void inc_r16(CPU *cpu, RegisterPair destination);
-static void dec_r16(CPU *cpu, const RegisterPair destination);
-static void ld_r8_imm8(CPU *cpu, const Memory *memory, Register destination);
-static void rlca(CPU *cpu);
-static void rrca(CPU *cpu);
-static void rla(CPU *cpu);
-static void rra(CPU *cpu);
-static void daa(CPU *cpu);
-static void cpl(CPU *cpu);
-static void scf(CPU *cpu);
-
-#endif //GAMEBOYEMU_CPU_H
+#endif // GAMEBOYEMU_CPU_H

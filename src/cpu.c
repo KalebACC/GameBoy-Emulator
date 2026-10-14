@@ -4,7 +4,6 @@
 
 #include "cpu.h"
 #include "../include/types.h"
-#include <stdbool.h>
 
 /**
  * @brief Fetches the next opcode from memory at the current program counter and increments it.
@@ -12,7 +11,7 @@
  * @param memory Pointer to the Memory.
  * @return 8-bit opcode value stored in the program counter (PC).
  */
-u8 cpu_fetch(CPU *cpu, const Memory *memory) {
+static u8 cpu_fetch(CPU *cpu, const Memory *memory) {
   const u8 value = memory_read(memory, cpu->PC);
   cpu->PC++;
   return value;
@@ -30,12 +29,30 @@ static u16 cpu_fetch16(CPU *cpu, const Memory *memory) {
   //GameBoy uses little-endian
   const u8 low = cpu_fetch(cpu, memory);
   const u8 high = cpu_fetch(cpu, memory);
-  return (u16) (high << 8) | low;
+  return (u16) (((u16) high << 8) | low);
 }
 
-//opcodes
+/**
+ * Checks whether the specified CPU flag condition is satisfied.
+ * @param cpu
+ * @param condition
+ * @return
+ */
+static bool cpu_check_condition(const CPU *cpu, const Condition condition) {
+  const bool zero = (cpu->F & 0x80) != 0;
+  const bool carry = (cpu->F & 0x10) != 0;
 
-//Block 0
+  switch (condition) {
+    case COND_NZ: return !zero;
+    case COND_Z: return zero;
+    case COND_NC: return !carry;
+    case COND_C: return carry;
+    default: return false;
+  }
+}
+
+
+//---------------------------------Block 0---------------------------------
 /**
  *  Executes a NOP operation.
  * @param cpu Pointer to the CPU.
@@ -65,6 +82,9 @@ static void ld_r16_imm16(CPU *cpu, const Memory *memory, const RegisterPair dest
     case HL:
       cpu->H = (u8) (value >> 8);
       cpu->L = (u8) value & 0xff;
+      break;
+    case SP:
+      cpu->SP = value;
       break;
     default:
       return;
@@ -116,7 +136,7 @@ static void ld_a_r16mem(CPU *cpu, const Memory *memory, const RegisterPair desti
     default:
       return;
   }
-  cpu->A = memory->bytes[address];
+  cpu->A = memory_read(memory, address);;
 }
 
 /**
@@ -141,22 +161,22 @@ static void inc_r16(CPU *cpu, const RegisterPair destination) {
   u16 value;
   switch (destination) {
     case BC:
-      value = (u16) ((u16) cpu->B << 8 | cpu->C);
+      value = (u16) (((u16) cpu->B << 8) | cpu->C);
       value++;
-      cpu->B = (value >> 8);
-      cpu->C = (value & 0xFF);
+      cpu->B = (u8) (value >> 8);
+      cpu->C = (u8) (value & 0xFF);
       break;
     case DE:
-      value = (u16) ((u16) cpu->D << 8 | cpu->E);
+      value = (u16) (((u16) cpu->D << 8) | cpu->E);
       value++;
-      cpu->D = (value >> 8);
-      cpu->E = (value & 0xFF);
+      cpu->D = (u8) (value >> 8);
+      cpu->E = (u8) (value & 0xFF);
       break;
     case HL:
-      value = (u16) ((u16) cpu->H << 8 | cpu->L);
+      value = (u16) (((u16) cpu->H << 8) | cpu->L);
       value++;
-      cpu->H = (value >> 8);
-      cpu->L = (value & 0xFF);
+      cpu->H = (u8) (value >> 8);
+      cpu->L = (u8) (value & 0xFF);
       break;
     case SP:
       cpu->SP++;
@@ -209,19 +229,19 @@ static void dec_r16(CPU *cpu, const RegisterPair destination) {
 static void ld_r8_imm8(CPU *cpu, const Memory *memory, const Register destination) {
   const u8 value = cpu_fetch(cpu, memory);
   switch (destination) {
-    case B: cpu->B = value;
+    case REG_B: cpu->B = value;
       break;
-    case C: cpu->C = value;
+    case REG_C: cpu->C = value;
       break;
-    case D: cpu->D = value;
+    case REG_D: cpu->D = value;
       break;
-    case E: cpu->E = value;
+    case REG_E: cpu->E = value;
       break;
-    case H: cpu->H = value;
+    case REG_H: cpu->H = value;
       break;
-    case L: cpu->L = value;
+    case REG_L: cpu->L = value;
       break;
-    case A: cpu->A = value;
+    case REG_A: cpu->A = value;
       break;
     default:
       return;
@@ -234,8 +254,8 @@ static void ld_r8_imm8(CPU *cpu, const Memory *memory, const Register destinatio
  * @param cpu Pointer to the CPU.
  */
 static void rlca(CPU *cpu) {
-  const u8 bit7 = (u8) (cpu->A << 7);
-  cpu->A = (u8) (cpu->A << 1 | bit7);
+  const u8 bit7 = (u8) ((cpu->A >> 7) & 0x01);
+  cpu->A = (u8) ((cpu->A << 1) | bit7);
   cpu->F = bit7 ? 0x10 : 0x00;
 }
 
@@ -339,10 +359,45 @@ static void scf(CPU *cpu) {
  */
 static void ccf(CPU *cpu) {
   cpu->F ^= 0x10;
-  cpu->F &= (u8)~0x60;
+  cpu->F &= (u8) ~0x60;
 }
 
-// opcode lookup
+/**
+ * @brief Jumps to a relative address using a signed 8-bit offset.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ */
+static void jr_imm8(CPU *cpu, const Memory *memory) {
+  const i8 offset = (i8) cpu_fetch(cpu, memory);
+  cpu->PC = (u16) (cpu->PC + offset);
+}
+
+/**
+ * @brief Performs a conditional relative jump using a signed 8-bit offset.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory.
+ * @param condition Condition that determines whether the jump occurs.
+ */
+static void jr_cond_imm8(CPU *cpu, const Memory *memory, const Condition condition) {
+  const i8 offset = (i8) cpu_fetch(cpu, memory);
+  if (cpu_check_condition(cpu, condition)) {
+    cpu->PC = (u16) (cpu->PC + offset);
+  }
+}
+
+/**
+ * Stops the CPU until a wake-up event occurs.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ */
+static void stop(CPU *cpu, const Memory *memory) {
+  (void) cpu_fetch(cpu, memory); // Use the second byte.
+  cpu->stopped = true;
+}
+
+//---------------------------------Block 1---------------------------------
+
+
 /**
  * @brief Executes a CPU instruction.
  * @param cpu Pointer to the CPU
@@ -361,7 +416,7 @@ void cpu_step(CPU *cpu, const Memory *memory) {
       break;
 
     case 0x06:
-      ld_r8_imm8(cpu, memory, B);
+      ld_r8_imm8(cpu, memory, REG_B);
       break;
 
     default:
