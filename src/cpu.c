@@ -29,7 +29,7 @@ static u16 cpu_fetch16(CPU *cpu, const Memory *memory) {
   //GameBoy uses little-endian
   const u8 low = cpu_fetch(cpu, memory);
   const u8 high = cpu_fetch(cpu, memory);
-  return (u16) (((u16) high << 8) | low);
+  return (((u16) high << 8) | low);
 }
 
 /**
@@ -136,7 +136,7 @@ static void ld_a_r16mem(CPU *cpu, const Memory *memory, const RegisterPair desti
     default:
       return;
   }
-  cpu->A = memory_read(memory, address);;
+  cpu->A = memory_read(memory, address);
 }
 
 /**
@@ -358,8 +358,8 @@ static void scf(CPU *cpu) {
  * @param cpu Pointer to the CPU.
  */
 static void ccf(CPU *cpu) {
-  cpu->F ^= 0x10;
-  cpu->F &= (u8) ~0x60;
+  cpu->F = (cpu->F & 0x80) |
+           ((cpu->F ^ 0x10) & 0x10);
 }
 
 /**
@@ -403,7 +403,7 @@ static void stop(CPU *cpu, const Memory *memory) {
  * @param cpu Pointer to the CPU
  * @param memory Pointer to the Memory.
  */
-void cpu_step(CPU *cpu, const Memory *memory) {
+void cpu_step(CPU *cpu, Memory *memory) {
   const u8 opcode = cpu_fetch(cpu, memory);
 
   switch (opcode) {

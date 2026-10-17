@@ -52,6 +52,6 @@ typedef enum {
 } Condition;
 
 
-void cpu_step(CPU *cpu, const Memory *memory);
+void cpu_step(CPU *cpu, Memory *memory);
 
 #endif // GAMEBOYEMU_CPU_H
