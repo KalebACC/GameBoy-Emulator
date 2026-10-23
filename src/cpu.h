@@ -20,8 +20,11 @@ typedef struct {
   u16 PC;
   u16 SP;
 
-  //stopping
+  // Execution and interrupt state (initialize to false).
+  bool halted;
   bool stopped;
+  bool ime;
+  bool halt_bug;
 } CPU;
 
 typedef enum {
@@ -41,7 +44,8 @@ typedef enum {
   REG_E,
   REG_H,
   REG_L,
-  REG_F
+  REG_F,
+  REG_HL_IND
 } Register;
 
 typedef enum {
