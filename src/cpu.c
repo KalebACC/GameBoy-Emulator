@@ -55,6 +55,32 @@ static bool cpu_check_condition(const CPU *cpu, const Condition condition) {
   }
 }
 
+/**
+ * @brief Pushes a 16-bit value onto the CPU stack.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ * @param value 16-bit value to push.
+ */
+static void cpu_push16(CPU *cpu, Memory *memory, const u16 value) {
+  cpu->SP--;
+  memory_write(memory, cpu->SP, (u8) (value >> 8));
+
+  cpu->SP--;
+  memory_write(memory, cpu->SP, (u8) (value & 0xFF));
+}
+
+/**
+ * @brief Pops a 16-bit value from the CPU stack.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ * @return The popped 16-bit value.
+ */
+static u16 cpu_pop16(CPU *cpu, const Memory *memory) {
+  const u8 low = memory_read(memory, cpu->SP++);
+  const u8 high = memory_read(memory, cpu->SP++);
+
+  return (u16)((high << 8) | low);
+}
 
 //---------------------------------Block 0---------------------------------
 /**
@@ -750,25 +776,280 @@ static void cp_a_r8(CPU *cpu, const Memory *memory, const Register r8) {
     case REG_HL_IND:
       value = memory_read(memory, ((u16) cpu->H << 8) | cpu->L);
       break;
-    case REG_A: value = cpu->A; break;
-    case REG_B: value = cpu->B; break;
-    case REG_C: value = cpu->C; break;
-    case REG_D: value = cpu->D; break;
-    case REG_E: value = cpu->E; break;
-    case REG_H: value = cpu->H; break;
-    case REG_L: value = cpu->L; break;
+    case REG_A: value = cpu->A;
+      break;
+    case REG_B: value = cpu->B;
+      break;
+    case REG_C: value = cpu->C;
+      break;
+    case REG_D: value = cpu->D;
+      break;
+    case REG_E: value = cpu->E;
+      break;
+    case REG_H: value = cpu->H;
+      break;
+    case REG_L: value = cpu->L;
+      break;
     default: return;
   }
 
   const u8 a = cpu->A;
-  const u8 result = (u8)(a - value);
+  const u8 result = (u8) (a - value);
 
-  cpu->F = (u8)(
-      (result == 0 ? 0x80 : 0) |
-      0x40 |
-      ((a & 0x0F) < (value & 0x0F) ? 0x20 : 0) |
-      (a < value ? 0x10 : 0)
+  cpu->F = (u8) (
+    (result == 0 ? 0x80 : 0) |
+    0x40 |
+    ((a & 0x0F) < (value & 0x0F) ? 0x20 : 0) |
+    (a < value ? 0x10 : 0)
   );
+}
+
+//---------------------------------Block 3---------------------------------
+
+/**
+ * @brief Add the value n8 to A..
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory.
+ */
+static void add_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+
+  const u8 old_a = cpu->A;
+  const u16 result = (u16) old_a + value;
+
+  cpu->A = (u8) result;
+
+  cpu->F = (u8) (
+    (cpu->A == 0 ? 0x80 : 0) |
+    (((old_a & 0x0F) + (value & 0x0F)) > 0x0F ? 0x20 : 0) |
+    (result > 0xFF ? 0x10 : 0)
+  );
+}
+
+/**
+ * @brief Add the value n8 plus the carry flag to A.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ */
+static void adc_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+  const u8 old_a = cpu->A;
+  const u8 carry = (cpu->F & 0x10) ? 1 : 0;
+
+  // Add A + source + carry.
+  const u16 result = (u16) old_a + value + carry;
+  cpu->A = (u8) result;
+
+  // Update flags
+  cpu->F = (u8) (
+    (cpu->A == 0 ? 0x80 : 0) |
+    (((old_a & 0x0F) + (value & 0x0F) + carry) > 0x0F ? 0x20 : 0) |
+    (result > 0xFF ? 0x10 : 0)
+  );
+}
+
+/**
+ * @brief Subtract the value n8 from A.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory
+ */
+static void sub_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+  const u8 old_a = cpu->A;
+  const u8 result = (u8) (old_a - value);
+
+  cpu->A = result;
+
+  cpu->F = (u8) (
+    (result == 0 ? 0x80 : 0) |
+    0x40 |
+    ((old_a & 0x0F) < (value & 0x0F) ? 0x20 : 0) |
+    (old_a < value ? 0x10 : 0)
+  );
+}
+
+/**
+ * @brief Subtract the value n8 and the carry flag from A.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory
+ */
+static void sbc_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+  const u8 old_a = cpu->A;
+  const u8 carry = (cpu->F & 0x10) ? 1 : 0;
+  const u16 result = (u16) old_a - value - carry;
+
+  // Store the lower 8 bits.
+  cpu->A = (u8) result;
+
+  // Update Flags.
+  cpu->F = (u8) (
+    (cpu->A == 0 ? 0x80 : 0) |
+    0x40 |
+    ((old_a & 0x0F) < ((value & 0x0F) + carry) ? 0x20 : 0) |
+    (old_a < ((u16) value + carry) ? 0x10 : 0)
+  );
+}
+
+/**
+ * @brief Set A to the bitwise AND between the value n8 and A.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory.
+ */
+static void and_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+
+  cpu->A &= value;
+  cpu->F = (u8) (
+    (cpu->A == 0 ? 0x80 : 0) |
+    0x20
+  );
+}
+
+/**
+ * @brief Set A to the bitwise XOR between the value n8 and A.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory.
+ */
+static void xor_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+  cpu->A ^= value;
+  cpu->F = (u8) (
+    (cpu->A == 0 ? 0x80 : 0)
+  );
+}
+
+/**
+ * @brief Set A to the bitwise OR between the value n8 and A.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ */
+static void or_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+  cpu->A |= value;
+  cpu->F = (u8) (
+    (cpu->A == 0 ? 0x80 : 0)
+  );
+}
+
+/**
+ * @brief ComPare the value in A with the value n8.
+ * This subtracts the value n8 from A and sets flags accordingly, but discards the result.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory for the [HL] operand.
+ */
+static void cp_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 value = cpu_fetch(cpu, memory);
+  const u8 a = cpu->A;
+  const u8 result = (u8) (a - value);
+
+  cpu->F = (u8) (
+    (result == 0 ? 0x80 : 0) |
+    0x40 |
+    ((a & 0x0F) < (value & 0x0F) ? 0x20 : 0) |
+    (a < value ? 0x10 : 0)
+  );
+}
+
+/**
+ * Return from subroutine if condition cc is met.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ * @param cond Condition Enum.
+ */
+static void ret_cond(CPU *cpu, const Memory *memory, const Condition cond) {
+  if (!cpu_check_condition(cpu, cond)) { return; }
+  cpu->PC = cpu_pop16(cpu, memory);
+}
+
+/**
+ * Return from subroutine.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory
+ */
+static void ret(CPU *cpu, const Memory *memory) {
+  cpu->PC = cpu_pop16(cpu, memory);
+}
+
+/**
+ * Return from subroutine and enable interrupts.
+ * This is basically equivalent to executing EI then RET, meaning that IME is set right after this instruction.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ */
+static void reti(CPU *cpu, const Memory *memory) {
+  ret(cpu, memory);
+  cpu->ime = true;
+}
+
+/**
+ * @brief Jump to address n16 if condition cc is met.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ * @param cond Condition Enum.
+ */
+static void jp_cond_imm16(CPU *cpu, const Memory *memory, const Condition cond) {
+  const u16 address = cpu_fetch(cpu, memory);
+
+  if (cpu_check_condition(cpu, cond)) {
+    cpu->PC = address;
+  }
+}
+
+/**
+ * @brief Jump to address n16; effectively, copy n16 into PC.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ */
+static void jp_imm16(CPU *cpu, const Memory *memory) {
+  const u16 address = cpu_fetch16(cpu, memory);
+  cpu->PC = address;
+}
+
+/**
+ * @brif Jump to address in HL; effectively, copy the value in register HL into PC.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ */
+static void jp_hl(CPU *cpu, const Memory *memory) {
+  cpu->PC = (u16) ((cpu->H << 8) | cpu->L);
+}
+
+/**
+ * @brief Call address n16 if condition cc is met.
+ * @param cpu Pointer to the CPU;
+ * @param memory Pointer to Memory;
+ * @param cond Condition Enum;
+ */
+static void call_cond_imm16(CPU *cpu, Memory *memory, const Condition cond) {
+  const u16 address = cpu_fetch16(cpu, memory);
+  if (!cpu_check_condition(cpu, cond)) { return; }
+  cpu_push16(cpu, memory, cpu->PC);
+  cpu->PC = address;
+}
+
+/**
+* @brief Call address n16.
+* This pushes the address of the instruction after the CALL on the stack, such that RET can pop it later;
+* then, it executes an implicit JP n16.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory
+ */
+static void call_imm16(CPU *cpu, Memory *memory) {
+  const u16 address = cpu_fetch16(cpu, memory);
+  cpu_push16(cpu, memory, cpu->PC);
+  cpu->PC = address;
+}
+
+/**
+ * @brief Calls a subroutine at a fixed restart address.
+ * @param cpu Pointer to the CPU.
+ * @param memory Pointer to Memory.
+ * @param target 3-bit restart target (0-7).
+ */
+static void rst(CPU *cpu, Memory *memory, const u8 target) {
+  cpu_push16(cpu, memory, cpu->PC);
+  cpu->PC = (u16)(target << 3);
 }
 
 
