@@ -79,7 +79,30 @@ static u16 cpu_pop16(CPU *cpu, const Memory *memory) {
   const u8 low = memory_read(memory, cpu->SP++);
   const u8 high = memory_read(memory, cpu->SP++);
 
-  return (u16)((high << 8) | low);
+  return (u16) ((high << 8) | low);
+}
+
+
+/* The opcode's r8 field encodes B, C, D, E, H, L, [HL], A in that order. */
+static u8 *cpu_r8_register(CPU *cpu, const u8 operand) {
+  u8 *const registers[] = {&cpu->B, &cpu->C, &cpu->D, &cpu->E, &cpu->H, &cpu->L, nullptr, &cpu->A};
+  return registers[operand];
+}
+
+static u16 cpu_hl(const CPU *cpu) {
+  return (u16) ((cpu->H << 8) | cpu->L);
+}
+
+static u8 cpu_read_r8(CPU *cpu, const Memory *memory, const u8 operand) {
+  return operand == 6 ? memory_read(memory, cpu_hl(cpu)) : *cpu_r8_register(cpu, operand);
+}
+
+static void cpu_write_r8(CPU *cpu, Memory *memory, const u8 operand, const u8 value) {
+  if (operand == 6) {
+    memory_write(memory, cpu_hl(cpu), value);
+  } else {
+    *cpu_r8_register(cpu, operand) = value;
+  }
 }
 
 //---------------------------------Block 0---------------------------------
@@ -425,50 +448,36 @@ static void stop(CPU *cpu, const Memory *memory) {
   cpu->stopped = true;
 }
 
+static void inc_r8(CPU *cpu, Memory *memory, const u8 operand) {
+  const u8 value = cpu_read_r8(cpu, memory, operand);
+  const u8 result = (u8) (value + 1);
+  cpu_write_r8(cpu, memory, operand, result);
+  cpu->F = (cpu->F & 0x10) | (result == 0 ? 0x80 : 0) |
+           ((value & 0x0F) == 0x0F ? 0x20 : 0);
+}
+
+static void dec_r8(CPU *cpu, Memory *memory, const u8 operand) {
+  const u8 value = cpu_read_r8(cpu, memory, operand);
+  const u8 result = (u8) (value - 1);
+  cpu_write_r8(cpu, memory, operand, result);
+  cpu->F = (cpu->F & 0x10) | 0x40 | (result == 0 ? 0x80 : 0) |
+           ((value & 0x0F) == 0 ? 0x20 : 0);
+}
+
+static void add_hl_r16(CPU *cpu, const u16 value) {
+  const u16 hl = cpu_hl(cpu);
+  const u32 result = (u32) hl + value;
+  cpu->F = (cpu->F & 0x80) | (result > 0xFFFF ? 0x10 : 0) |
+           (((hl & 0x0FFF) + (value & 0x0FFF)) > 0x0FFF ? 0x20 : 0);
+  cpu->H = (u8) (result >> 8);
+  cpu->L = (u8) result;
+}
+
 //---------------------------------Block 1---------------------------------
 
-/**
- * @brief Copy (aka Load) the value in register on the right into the register on the left.
- * @param cpu Pointer to the CPU.
- * @param destination Designation register Enum
- * @param source Source register Enum
- */
-static void ld_r8_r8(CPU *cpu, const Register destination, const Register source) {
-  u8 value;
-  switch (source) {
-    case REG_A: value = cpu->A;
-      break;
-    case REG_B: value = cpu->B;
-      break;
-    case REG_C: value = cpu->C;
-      break;
-    case REG_D: value = cpu->D;
-      break;
-    case REG_E: value = cpu->E;
-      break;
-    case REG_H: value = cpu->H;
-      break;
-    case REG_L: value = cpu->L;
-      break;
-    default: return;
-  }
-  switch (destination) {
-    case REG_A: cpu->A = value;
-      break;
-    case REG_B: cpu->B = value;
-      break;
-    case REG_C: cpu->C = value;
-      break;
-    case REG_D: cpu->D = value;
-      break;
-    case REG_E: cpu->E = value;
-      break;
-    case REG_H: cpu->H = value;
-      break;
-    case REG_L: cpu->L = value;
-      break;
-    default: return;
-  }
+static void ld_r8_r8(CPU *cpu, Memory *memory, const u8 opcode) {
+  const u8 value = cpu_read_r8(cpu, memory, opcode & 7);
+  cpu_write_r8(cpu, memory, (opcode >> 3) & 7, value);
 }
 
 /** @brief HALT is opcode 0x76, replacing LD [HL], [HL]. */
@@ -989,7 +998,7 @@ static void reti(CPU *cpu, const Memory *memory) {
  * @param cond Condition Enum.
  */
 static void jp_cond_imm16(CPU *cpu, const Memory *memory, const Condition cond) {
-  const u16 address = cpu_fetch(cpu, memory);
+  const u16 address = cpu_fetch16(cpu, memory);
 
   if (cpu_check_condition(cpu, cond)) {
     cpu->PC = address;
@@ -1007,11 +1016,10 @@ static void jp_imm16(CPU *cpu, const Memory *memory) {
 }
 
 /**
- * @brif Jump to address in HL; effectively, copy the value in register HL into PC.
+ * @brief Jump to address in HL; effectively, copy the value in register HL into PC.
  * @param cpu Pointer to the CPU.
- * @param memory Pointer to Memory.
  */
-static void jp_hl(CPU *cpu, const Memory *memory) {
+static void jp_hl(CPU *cpu) {
   cpu->PC = (u16) ((cpu->H << 8) | cpu->L);
 }
 
@@ -1049,9 +1057,257 @@ static void call_imm16(CPU *cpu, Memory *memory) {
  */
 static void rst(CPU *cpu, Memory *memory, const u8 target) {
   cpu_push16(cpu, memory, cpu->PC);
-  cpu->PC = (u16)(target << 3);
+  cpu->PC = (u16) (target << 3);
 }
 
+/**
+ * @brief Pop register r16 from the stack.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory
+ * @param destination Register Pair Destination
+ */
+static void pop_r16stk(CPU *cpu, const Memory *memory, const RegisterPair destination) {
+  const u16 value = cpu_pop16(cpu, memory);
+  const u8 high = (u8) (value >> 8);
+  const u8 low = (u8) value;
+
+  switch (destination) {
+    case BC:
+      cpu->B = high;
+      cpu->C = low;
+      break;
+    case DE:
+      cpu->D = high;
+      cpu->E = low;
+      break;
+    case HL:
+      cpu->H = high;
+      cpu->L = low;
+      break;
+    case AF:
+      cpu->A = high;
+      cpu->F = (u8) (low & 0xF0u);
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Push register r16 into the stack.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory
+ * @param destination Desination Register Pair
+ */
+static void push_r16stk(CPU *cpu, Memory *memory, const RegisterPair destination) {
+  u8 high;
+  u8 low;
+
+  switch (destination) {
+    case BC:
+      high = cpu->B;
+      low = cpu->C;
+      break;
+    case DE:
+      high = cpu->D;
+      low = cpu->E;
+      break;
+    case HL:
+      high = cpu->H;
+      low = cpu->L;
+      break;
+    case AF:
+      high = cpu->A;
+      low = (u8) (cpu->F & 0xF0u);
+      break;
+    default:
+      return;
+  }
+
+  cpu_push16(cpu, memory, (u16) (((u16) high << 8) | low));
+}
+
+/**
+ * Copy the value in register A into the byte at address $FF00+C.
+ * @param cpu Pointer to the CPU
+ * @param memory Pointer to Memory
+ */
+static void ldh_c_a(const CPU *cpu, Memory *memory) {
+  const u16 address = (u16) (0xFF00u + cpu->C);
+  memory_write(memory, address, cpu->A);
+}
+
+/**
+ * Copy the value in register A into the byte at address $FF00 + imm8.
+ * @param cpu Pointer to cpu
+ * @param memory Pointer to memory
+ */
+static void ldh_imm8_a(CPU *cpu, Memory *memory) {
+  const u8 offset = cpu_fetch(cpu, memory);
+  const u16 address = (u16) (0xFF00u + offset);
+  memory_write(memory, address, cpu->A);
+}
+
+/**
+ * Copy the value in register A into the byte at address imm16.
+ * @param cpu Pointer to cpu
+ * @param memory Pointer to memory
+ */
+static void ld_imm16_a(CPU *cpu, Memory *memory) {
+  const u16 address = cpu_fetch16(cpu, memory);
+  memory_write(memory, address, cpu->A);
+}
+
+/**
+ * Copy the byte at address $FF00+C into register A.
+ * @param cpu Pointer to cpu
+ * @param memory Pointer to memory
+ */
+static void ldh_a_c(CPU *cpu, const Memory *memory) {
+  const u16 address = (u16) (0xFF00u + cpu->C);
+  cpu->A = memory_read(memory, address);
+}
+
+/**
+ * Copy the byte at address imm8 into register A, provided the address is between $FF00 and $FFFF.
+ * @param cpu Pointer cpu
+ * @param memory Pointer to memory
+ */
+static void ldh_a_imm8(CPU *cpu, const Memory *memory) {
+  const u8 low = cpu_fetch(cpu, memory);
+  const u16 address = (u16) (0xFF00u | low);
+  cpu->A = memory_read(memory, address);
+}
+
+/**
+ * Copy the byte at address imm16 into register A, provided the address is between $FF00 and $FFFF.
+ * @param cpu Pointer cpu
+ * @param memory Pointer to memory
+ */
+static void ld_a_imm16(CPU *cpu, const Memory *memory) {
+  const u16 address = cpu_fetch16(cpu, memory);
+  cpu->A = memory_read(memory, address);
+}
+
+/**
+ * @Breif Add the signed value e8 to SP.
+ * @param cpu Pointer to memory
+ * @param memory Pointer to cpu
+ */
+static void add_sp_imm8(CPU *cpu, const Memory *memory) {
+  const u8 imm = cpu_fetch(cpu, memory);
+  const int offset = (imm < 0x80u) ? (int) imm : (int) imm - 0x100;
+  const u16 sp = cpu->SP;
+
+  cpu->F = 0;
+  if ((sp & 0x0Fu) + (imm & 0x0Fu) > 0x0Fu) {
+    cpu->F |= 0x20u; /* H */
+  }
+  if ((sp & 0xFFu) + imm > 0xFFu) {
+    cpu->F |= 0x10u; /* C */
+  }
+
+  cpu->SP = (u16) (sp + offset);
+}
+
+/**
+ * Add the signed value e8 to SP and copy the result in HL.
+ * @param cpu Pointer to the cpu
+ * @param memory Pointer to memory
+ */
+static void ld_hl_sp_imm8(CPU *cpu, const Memory *memory) {
+  const u8 imm = cpu_fetch(cpu, memory);
+  const int offset = (imm < 0x80u) ? (int) imm : (int) imm - 0x100;
+  const u16 sp = cpu->SP;
+  const u16 result = (u16) (sp + offset);
+
+  cpu->F = 0;
+  if ((sp & 0x0Fu) + (imm & 0x0Fu) > 0x0Fu) {
+    cpu->F |= 0x20u; /* H flag */
+  }
+  if ((sp & 0xFFu) + imm > 0xFFu) {
+    cpu->F |= 0x10u; /* C flag */
+  }
+
+  cpu->H = (u8) (result >> 8);
+  cpu->L = (u8) result;
+}
+
+//---------------------------------CB Prefix---------------------------------
+
+static u8 cb_rotate_shift(CPU *cpu, const u8 operation, const u8 value) {
+  const u8 carry_in = (cpu->F >> 4) & 1;
+  const u8 high_bit = value >> 7;
+  const u8 low_bit = value & 1;
+  u8 carry_out = 0;
+  u8 result = value;
+
+  switch (operation) {
+    case 0: // RLC
+      result = (u8) ((value << 1) | high_bit);
+      carry_out = high_bit;
+      break;
+    case 1: // RRC
+      result = (u8) ((value >> 1) | (low_bit << 7));
+      carry_out = low_bit;
+      break;
+    case 2: // RL
+      result = (u8) ((value << 1) | carry_in);
+      carry_out = high_bit;
+      break;
+    case 3: // RR
+      result = (u8) ((value >> 1) | (carry_in << 7));
+      carry_out = low_bit;
+      break;
+    case 4: // SLA
+      result = (u8) (value << 1);
+      carry_out = high_bit;
+      break;
+    case 5: // SRA
+      result = (u8) ((value >> 1) | (value & 0x80));
+      carry_out = low_bit;
+      break;
+    case 6: // SWAP
+      result = (u8) ((value << 4) | (value >> 4));
+      break;
+    case 7: // SRL
+      result = value >> 1;
+      carry_out = low_bit;
+      break;
+    default:
+      break;
+  }
+
+  cpu->F = (result == 0 ? 0x80 : 0) | (carry_out << 4);
+  return result;
+}
+
+static void cpu_step_cb(CPU *cpu, Memory *memory) {
+  const u8 opcode = cpu_fetch(cpu, memory);
+  const u8 operand = opcode & 7;
+  const u8 operation = (opcode >> 3) & 7;
+  u8 value = cpu_read_r8(cpu, memory, operand);
+  const u8 mask = (u8) (1u << operation);
+
+  switch (opcode >> 6) {
+    case 0:
+      value = cb_rotate_shift(cpu, operation, value);
+      break;
+    case 1: // BIT
+      cpu->F = (cpu->F & 0x10) | 0x20 | ((value & mask) == 0 ? 0x80 : 0);
+      return;
+    case 2: // RES
+      value &= (u8) ~mask;
+      break;
+    case 3: // SET
+      value |= mask;
+      break;
+    default:
+      break;
+  }
+
+  cpu_write_r8(cpu, memory, operand, value);
+}
 
 //---------------------------------Execution---------------------------------
 
@@ -1079,6 +1335,7 @@ void cpu_step(CPU *cpu, Memory *memory) {
       interrupt++;
     }
     cpu->ime = false;
+    cpu->ime_enable_pending = false;
     cpu->halt_bug = false;
     memory_write(memory, 0xFF0F, (u8) (memory_read(memory, 0xFF0F) & ~(1u << interrupt)));
     memory_write(memory, --cpu->SP, (u8) (cpu->PC >> 8));
@@ -1087,9 +1344,54 @@ void cpu_step(CPU *cpu, Memory *memory) {
     return;
   }
 
+  const bool enable_ime_after_instruction = cpu->ime_enable_pending;
   const u8 opcode = cpu_fetch(cpu, memory);
 
   switch (opcode) {
+    // INC r8
+    case 0x04:
+    case 0x0C:
+    case 0x14:
+    case 0x1C:
+    case 0x24:
+    case 0x2C:
+    case 0x34:
+    case 0x3C:
+      inc_r8(cpu, memory, (opcode >> 3) & 7);
+      break;
+
+    // DEC r8
+    case 0x05:
+    case 0x0D:
+    case 0x15:
+    case 0x1D:
+    case 0x25:
+    case 0x2D:
+    case 0x35:
+    case 0x3D:
+      dec_r8(cpu, memory, (opcode >> 3) & 7);
+      break;
+
+    case 0x09: // ADD HL, BC
+      add_hl_r16(cpu, (u16) ((cpu->B << 8) | cpu->C));
+      break;
+
+    case 0x19: // ADD HL, DE
+      add_hl_r16(cpu, (u16) ((cpu->D << 8) | cpu->E));
+      break;
+
+    case 0x29: // ADD HL, HL
+      add_hl_r16(cpu, cpu_hl(cpu));
+      break;
+
+    case 0x39: // ADD HL, SP
+      add_hl_r16(cpu, cpu->SP);
+      break;
+
+    case 0x36: // LD [HL], imm8
+      cpu_write_r8(cpu, memory, 6, cpu_fetch(cpu, memory));
+      break;
+
     case 0x00: // NOP
       nop(cpu);
       break;
@@ -1264,6 +1566,73 @@ void cpu_step(CPU *cpu, Memory *memory) {
 
     case 0x3F: // CCF
       ccf(cpu);
+      break;
+
+    // LD r8, r8
+    case 0x40:
+    case 0x41:
+    case 0x42:
+    case 0x43:
+    case 0x44:
+    case 0x45:
+    case 0x46:
+    case 0x47:
+    case 0x48:
+    case 0x49:
+    case 0x4A:
+    case 0x4B:
+    case 0x4C:
+    case 0x4D:
+    case 0x4E:
+    case 0x4F:
+    case 0x50:
+    case 0x51:
+    case 0x52:
+    case 0x53:
+    case 0x54:
+    case 0x55:
+    case 0x56:
+    case 0x57:
+    case 0x58:
+    case 0x59:
+    case 0x5A:
+    case 0x5B:
+    case 0x5C:
+    case 0x5D:
+    case 0x5E:
+    case 0x5F:
+    case 0x60:
+    case 0x61:
+    case 0x62:
+    case 0x63:
+    case 0x64:
+    case 0x65:
+    case 0x66:
+    case 0x67:
+    case 0x68:
+    case 0x69:
+    case 0x6A:
+    case 0x6B:
+    case 0x6C:
+    case 0x6D:
+    case 0x6E:
+    case 0x6F:
+    case 0x70:
+    case 0x71:
+    case 0x72:
+    case 0x73:
+    case 0x74:
+    case 0x75:
+    case 0x77:
+    case 0x78:
+    case 0x79:
+    case 0x7A:
+    case 0x7B:
+    case 0x7C:
+    case 0x7D:
+    case 0x7E:
+    case 0x7F:
+      ld_r8_r8(cpu, memory, opcode);
       break;
 
     case 0x76: // HALT (block 1 exception)
@@ -1526,7 +1895,224 @@ void cpu_step(CPU *cpu, Memory *memory) {
       cp_a_r8(cpu, memory, REG_A);
       break;
 
+    case 0xC0: // RET NZ
+      ret_cond(cpu, memory, COND_NZ);
+      break;
+
+    case 0xC1: // POP BC
+      pop_r16stk(cpu, memory, BC);
+      break;
+
+    case 0xC2: // JP NZ, imm16
+      jp_cond_imm16(cpu, memory, COND_NZ);
+      break;
+
+    case 0xC3: // JP imm16
+      jp_imm16(cpu, memory);
+      break;
+
+    case 0xC4: // CALL NZ, imm16
+      call_cond_imm16(cpu, memory, COND_NZ);
+      break;
+
+    case 0xC5: // PUSH BC
+      push_r16stk(cpu, memory, BC);
+      break;
+
+    case 0xC6: // ADD A, imm8
+      add_a_imm8(cpu, memory);
+      break;
+
+    case 0xC7: // RST 0x00
+      rst(cpu, memory, 0);
+      break;
+
+    case 0xC8: // RET Z
+      ret_cond(cpu, memory, COND_Z);
+      break;
+
+    case 0xC9: // RET
+      ret(cpu, memory);
+      break;
+
+    case 0xCB: // CB prefix
+      cpu_step_cb(cpu, memory);
+      break;
+
+    case 0xCA: // JP Z, imm16
+      jp_cond_imm16(cpu, memory, COND_Z);
+      break;
+
+    case 0xCC: // CALL Z, imm16
+      call_cond_imm16(cpu, memory, COND_Z);
+      break;
+
+    case 0xCD: // CALL imm16
+      call_imm16(cpu, memory);
+      break;
+
+    case 0xCE: // ADC A, imm8
+      adc_a_imm8(cpu, memory);
+      break;
+
+    case 0xCF: // RST 0x08
+      rst(cpu, memory, 1);
+      break;
+
+    case 0xD0: // RET NC
+      ret_cond(cpu, memory, COND_NC);
+      break;
+
+    case 0xD1: // POP DE
+      pop_r16stk(cpu, memory, DE);
+      break;
+
+    case 0xD2: // JP NC, imm16
+      jp_cond_imm16(cpu, memory, COND_NC);
+      break;
+
+    case 0xD4: // CALL NC, imm16
+      call_cond_imm16(cpu, memory, COND_NC);
+      break;
+
+    case 0xD5: // PUSH DE
+      push_r16stk(cpu, memory, DE);
+      break;
+
+    case 0xD6: // SUB A, imm8
+      sub_a_imm8(cpu, memory);
+      break;
+
+    case 0xD7: // RST 0x10
+      rst(cpu, memory, 2);
+      break;
+
+    case 0xD8: // RET C
+      ret_cond(cpu, memory, COND_C);
+      break;
+
+    case 0xD9: // RETI
+      reti(cpu, memory);
+      break;
+
+    case 0xDA: // JP C, imm16
+      jp_cond_imm16(cpu, memory, COND_C);
+      break;
+
+    case 0xDC: // CALL C, imm16
+      call_cond_imm16(cpu, memory, COND_C);
+      break;
+
+    case 0xDE: // SBC A, imm8
+      sbc_a_imm8(cpu, memory);
+      break;
+
+    case 0xDF: // RST 0x18
+      rst(cpu, memory, 3);
+      break;
+
+    case 0xE0: // LDH [imm8], A
+      ldh_imm8_a(cpu, memory);
+      break;
+
+    case 0xE1: // POP HL
+      pop_r16stk(cpu, memory, HL);
+      break;
+
+    case 0xE2: // LDH [C], A
+      ldh_c_a(cpu, memory);
+      break;
+
+    case 0xE5: // PUSH HL
+      push_r16stk(cpu, memory, HL);
+      break;
+
+    case 0xE6: // AND A, imm8
+      and_a_imm8(cpu, memory);
+      break;
+
+    case 0xE7: // RST 0x20
+      rst(cpu, memory, 4);
+      break;
+
+    case 0xE8: // ADD SP, imm8
+      add_sp_imm8(cpu, memory);
+      break;
+
+    case 0xE9: // JP HL
+      jp_hl(cpu);
+      break;
+
+    case 0xEA: // LD [imm16], A
+      ld_imm16_a(cpu, memory);
+      break;
+
+    case 0xEE: // XOR A, imm8
+      xor_a_imm8(cpu, memory);
+      break;
+
+    case 0xEF: // RST 0x28
+      rst(cpu, memory, 5);
+      break;
+
+    case 0xF0: // LDH A, [imm8]
+      ldh_a_imm8(cpu, memory);
+      break;
+
+    case 0xF1: // POP AF
+      pop_r16stk(cpu, memory, AF);
+      break;
+
+    case 0xF2: // LDH A, [C]
+      ldh_a_c(cpu, memory);
+      break;
+
+    case 0xF3: // DI
+      cpu->ime = false;
+      cpu->ime_enable_pending = false;
+      break;
+
+    case 0xF5: // PUSH AF
+      push_r16stk(cpu, memory, AF);
+      break;
+
+    case 0xF6: // OR A, imm8
+      or_a_imm8(cpu, memory);
+      break;
+
+    case 0xF7: // RST 0x30
+      rst(cpu, memory, 6);
+      break;
+
+    case 0xF8: // LD HL, SP + imm8
+      ld_hl_sp_imm8(cpu, memory);
+      break;
+
+    case 0xF9: // LD SP, HL
+      cpu->SP = cpu_hl(cpu);
+      break;
+
+    case 0xFA: // LD A, [imm16]
+      ld_a_imm16(cpu, memory);
+      break;
+
+    case 0xFB: // EI
+      cpu->ime_enable_pending = true;
+      break;
+
+    case 0xFE: // CP A, imm8
+      cp_a_imm8(cpu, memory);
+      break;
+
+    case 0xFF: // RST 0x38
+      rst(cpu, memory, 7);
+      break;
     default:
       return;
+  }
+
+  if (enable_ime_after_instruction && cpu->ime_enable_pending) {
+    cpu->ime = true;
+    cpu->ime_enable_pending = false;
   }
 }

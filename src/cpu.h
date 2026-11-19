@@ -24,6 +24,7 @@ typedef struct {
   bool halted;
   bool stopped;
   bool ime;
+  bool ime_enable_pending;
   bool halt_bug;
 } CPU;
 
